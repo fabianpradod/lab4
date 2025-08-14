@@ -4,6 +4,11 @@ use petgraph::dot::{Dot, Config};
 use petgraph::graph::{NodeIndex};
 use petgraph::Graph;
 use petgraph::Directed;
+use std::process::Command;
+use std::collections::HashSet;
+
+// Fabian Prado - Sofia Lopez
+// Laboratorio 4 - Teoría de la Computación
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -342,27 +347,6 @@ impl NFA {
             final_state: final_id,
         }
     }
-
-    pub fn print_nfa(&self) {
-        println!("===================");
-        println!("NFA");
-        println!("Start: {}", self.start_state);
-        println!("Final: {}", self.final_state);
-        println!("\nTransitions:");
-        
-        for state in &self.states {
-            for transition in &state.transitions {
-                let symbol = match transition.symbol {
-                    Some(c) => c.to_string(),
-                    None => "ε".to_string(),
-                };
-                println!("  State {} --[{}]--> State {}", 
-                    state.id, symbol, transition.to_state);
-            }
-        }
-        println!("===================\n");
-    }
-
 }
 
 pub struct ThompsonBuilder {
@@ -609,8 +593,142 @@ impl ThompsonBuilder {
     }
 }
 
+// For its simplistic approach, we will use graphiz to visualize the NFA
+// brew instal graphviz (run this if u dont have it installed)
+pub struct NFAVisualizer; 
 
-fn process_regex(input: &str) -> Result<(), Error> {
+impl NFAVisualizer {
+    pub fn to_dot(nfa: &NFA) -> String {
+        let mut dot = String::new();
+        dot.push_str("digraph NFA {\n");
+        dot.push_str("    rankdir=LR;\n");
+        dot.push_str("    node [shape=circle];\n");
+        
+        // Mark initial state with incoming arrow
+        dot.push_str(&format!("    start [shape=none, label=\"\"];\n"));
+        dot.push_str(&format!("    start -> {};\n", nfa.start_state));
+        
+        // Mark final state with double circle
+        dot.push_str(&format!("    {} [shape=doublecircle];\n", nfa.final_state));
+        
+        // Add all transitions
+        for state in &nfa.states {
+            for transition in &state.transitions {
+                let label = match transition.symbol {
+                    Some(c) => c.to_string(),
+                    None => "ε".to_string(),
+                };
+                dot.push_str(&format!("    {} -> {} [label=\"{}\"];\n", 
+                    state.id, transition.to_state, label));
+            }
+        }
+        
+        dot.push_str("}\n");
+        dot
+    }
+    
+    pub fn save_to_file(nfa: &NFA, filename: &str) -> Result<(), Error> {
+        let dot_content = Self::to_dot(nfa);
+        fs::write(filename, &dot_content).map_err(|_| Error::File)?;
+        
+        // generate png
+        let png_filename = filename.replace(".dot", ".png");
+        let output = Command::new("dot")
+            .args(&["-Tpng", filename, "-o", &png_filename])
+            .output();
+        
+        match output {
+            Ok(_) => {
+                println!("NFA guardado en: {}", filename);
+                println!("PNG generado en: {}", png_filename);
+            }
+            Err(_) => {
+                println!("NFA guardado en: {}", filename);
+                println!("Error generando PNG (brew install graphviz)");
+            }
+        }
+        
+        Ok(())
+    }
+
+    pub fn print_nfa_details(nfa: &NFA) {
+        println!("\n===================");
+        println!("NFA");
+        println!("Start: {}", nfa.start_state);
+        println!("Final: {}", nfa.final_state);
+        println!("\nTransitions:");
+        
+        for state in &nfa.states {
+            for transition in &state.transitions {
+                let symbol = match transition.symbol {
+                    Some(c) => c.to_string(),
+                    None => "ε".to_string(),
+                };
+                println!("  State {} --[{}]--> State {}", 
+                    state.id, symbol, transition.to_state);
+            }
+        }
+        println!("===================\n");
+    }
+}
+
+pub struct NFASimulator;
+
+impl NFASimulator {
+    fn epsilon_closure(nfa: &NFA, states: HashSet<usize>) -> HashSet<usize> {
+        let mut closure = states.clone();
+        let mut stack: Vec<usize> = states.into_iter().collect();
+        
+        while let Some(state_id) = stack.pop() {
+            if let Some(state) = nfa.states.iter().find(|s| s.id == state_id) {
+                for transition in &state.transitions {
+                    if transition.symbol.is_none() {
+                        if closure.insert(transition.to_state) {
+                            stack.push(transition.to_state);
+                        }
+                    }
+                }
+            }
+        }
+        closure
+    }
+    
+    fn move_states(nfa: &NFA, states: &HashSet<usize>, symbol: char) -> HashSet<usize> {
+        let mut next_states = HashSet::new();
+        
+        for &state_id in states {
+            if let Some(state) = nfa.states.iter().find(|s| s.id == state_id) {
+                for transition in &state.transitions {
+                    if let Some(trans_symbol) = transition.symbol {
+                        if trans_symbol == symbol {
+                            next_states.insert(transition.to_state);
+                        }
+                    }
+                }
+            }
+        }
+        next_states
+    }
+    
+    pub fn simulate(nfa: &NFA, input: &str) -> bool {
+        let mut current_states = HashSet::new();
+        current_states.insert(nfa.start_state);
+        current_states = Self::epsilon_closure(nfa, current_states);
+        
+        for ch in input.chars() {
+            let next_states = Self::move_states(nfa, &current_states, ch);
+            current_states = Self::epsilon_closure(nfa, next_states);
+            
+            if current_states.is_empty() {
+                return false;
+            }
+        }
+        
+        current_states.contains(&nfa.final_state)
+    }
+}
+
+fn process_regex(input: &str, index: usize) -> Result<NFA, Error> {
     println!("Input: {}", input);
     
     let mut tokenizer = Tokenizer::new(input);
@@ -629,11 +747,20 @@ fn process_regex(input: &str) -> Result<(), Error> {
 
     let mut thompson = ThompsonBuilder::new();
     let nfa = thompson.build_from_tree(&syntax_tree);
-    nfa.print_nfa();
     
-    Ok(())
+    NFAVisualizer::print_nfa_details(&nfa);
+    
+    let filename = format!("nfa_{}.dot", index);
+    NFAVisualizer::save_to_file(&nfa, &filename)?;
+    
+    Ok((nfa))
 }
 
+// Precheck if a string contains regex operators
+fn is_regex(s: &str) -> bool {
+    s.contains('*') || s.contains('+') || s.contains('?') || 
+    s.contains('|') || s.contains('(') || s.contains(')')
+}
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 {
@@ -655,14 +782,42 @@ fn main() {
             return;
         }
     };
+
+    let lines: Vec<&str> = content.lines().collect();
+    let mut i = 0;
+    let mut regex_count = 0;
     
-    for (index, line) in content.lines().enumerate() {
-        if line.trim().is_empty() { continue; }
-        
-        println!("--- Procesando línea {} ---", index + 1);
-        if let Err(e) = process_regex(line) {
-            println!("Error procesando '{}': {:?}", line, e);
+    while i < lines.len() {
+        let line = lines[i].trim();
+        if line.is_empty() {
+            i += 1;
+            continue;
         }
-        println!(); 
+        
+        if is_regex(line) {
+            regex_count += 1;
+            println!("\nProcesando expresión regular {}", regex_count);
+            
+            match process_regex(line, regex_count) {
+                Ok(nfa) => {
+                    i += 1;
+                    while i < lines.len() && !is_regex(lines[i]) && !lines[i].trim().is_empty() {
+                        let test_string = lines[i].trim();
+                        
+                        let result = NFASimulator::simulate(&nfa, test_string);
+                        println!("w = '{}': {}", test_string, if result { "sí" } else { "no" });
+                        
+                        i += 1;
+                    }
+                }
+                Err(e) => {
+                    println!("Error procesando '{}': {:?}", line, e);
+                    i += 1;
+                }
+            }
+        } else {
+            println!("Línea inválida ignorada: '{}'", line);
+            i += 1;
+        }
     }
 }
