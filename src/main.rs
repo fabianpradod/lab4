@@ -264,9 +264,354 @@ impl TreeVisualizer {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct NFATransition {
+    pub symbol: Option<char>,  // None represents epsilon 
+    pub to_state: usize,       // ID of destination 
+}
+
+#[derive(Debug, Clone)]
+pub struct NFAState {
+    pub id: usize,
+    pub is_final: bool,
+    pub transitions: Vec<NFATransition>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NFA {
+    pub states: Vec<NFAState>,
+    pub start_state: usize,
+    pub final_state: usize,
+}
+
+impl NFAState {
+    pub fn new(id: usize, is_final: bool) -> Self {
+        Self {
+            id,
+            is_final,
+            transitions: Vec::new(),
+        }
+    }
+    
+    pub fn add_transition(&mut self, symbol: Option<char>, to_state: usize) {
+        self.transitions.push(NFATransition { symbol, to_state });
+    }
+}
+
+impl NFA {
+    pub fn new() -> Self {
+        Self {
+            states: Vec::new(),
+            start_state: 0,
+            final_state: 0,
+        }
+    }
+    
+    // Helper to create a 2-state NFA for a character
+    pub fn from_char(c: char, state_counter: &mut usize) -> Self {
+        let start_id = *state_counter;
+        let final_id = *state_counter + 1;
+        *state_counter += 2;
+        
+        let mut start_state = NFAState::new(start_id, false);
+        start_state.add_transition(Some(c), final_id);
+        
+        let final_state = NFAState::new(final_id, true);
+        
+        Self {
+            states: vec![start_state, final_state],
+            start_state: start_id,
+            final_state: final_id,
+        }
+    }
+    
+    // Helper to create NFA for epsilon
+    pub fn from_epsilon(state_counter: &mut usize) -> Self {
+        let start_id = *state_counter;
+        let final_id = *state_counter + 1;
+        *state_counter += 2;
+        
+        let mut start_state = NFAState::new(start_id, false);
+        start_state.add_transition(None, final_id);  // None = epsilon
+        
+        let final_state = NFAState::new(final_id, true);
+        
+        Self {
+            states: vec![start_state, final_state],
+            start_state: start_id,
+            final_state: final_id,
+        }
+    }
+
+    pub fn print_nfa(&self) {
+        println!("===================");
+        println!("NFA");
+        println!("Start: {}", self.start_state);
+        println!("Final: {}", self.final_state);
+        println!("\nTransitions:");
+        
+        for state in &self.states {
+            for transition in &state.transitions {
+                let symbol = match transition.symbol {
+                    Some(c) => c.to_string(),
+                    None => "ε".to_string(),
+                };
+                println!("  State {} --[{}]--> State {}", 
+                    state.id, symbol, transition.to_state);
+            }
+        }
+        println!("===================\n");
+    }
+
+}
+
+pub struct ThompsonBuilder {
+    state_counter: usize,
+}
+
+impl ThompsonBuilder {
+    pub fn new() -> Self {
+        Self { state_counter: 0 }
+    }
+    
+    pub fn build_from_tree(&mut self, tree: &TreeNode) -> NFA {
+        match &tree.token {
+            Token::Literal(c) => {
+                if *c == 'ε' {
+                    self.build_epsilon()
+                } else {
+                    self.build_literal(*c)
+                }
+            }
+            Token::Concatenation => {
+                let left = self.build_from_tree(&tree.children[0]);
+                let right = self.build_from_tree(&tree.children[1]);
+                self.concatenate(left, right)
+            }
+            Token::Alternation => {
+                let left = self.build_from_tree(&tree.children[0]);
+                let right = self.build_from_tree(&tree.children[1]);
+                self.alternate(left, right)
+            }
+            Token::ZeroOrMore => {
+                let child = self.build_from_tree(&tree.children[0]);
+                self.kleene_star(child)
+            }
+            Token::OneOrMore => {
+                let child = self.build_from_tree(&tree.children[0]);
+                self.one_or_more(child)
+            }
+            Token::ZeroOrOne => {
+                let child = self.build_from_tree(&tree.children[0]);
+                self.zero_or_one(child)
+            }
+            _ => panic!("Invalid token: {:?}", tree.token),
+        }
+    }
+    
+    // Build NFA for single character
+    fn build_literal(&mut self, c: char) -> NFA {
+        let start = self.state_counter;
+        let end = self.state_counter + 1;
+        self.state_counter += 2;
+        
+        let mut states = vec![
+            NFAState::new(start, false),
+            NFAState::new(end, true),
+        ];
+        
+        states[0].add_transition(Some(c), end);
+        
+        NFA {
+            states,
+            start_state: start,
+            final_state: end,
+        }
+    }
+    
+    // Build NFA for epsilon
+    fn build_epsilon(&mut self) -> NFA {
+        let start = self.state_counter;
+        let end = self.state_counter + 1;
+        self.state_counter += 2;
+        
+        let mut states = vec![
+            NFAState::new(start, false),
+            NFAState::new(end, true),
+        ];
+        
+        states[0].add_transition(None, end);  // None = epsilon
+        
+        NFA {
+            states,
+            start_state: start,
+            final_state: end,
+        }
+    }
+    
+    // Concatenation
+    fn concatenate(&mut self, mut left: NFA, mut right: NFA) -> NFA {
+        // Connect left to right with epsilon
+        for state in &mut left.states {
+            if state.id == left.final_state {
+                state.add_transition(None, right.start_state);
+                state.is_final = false;  
+            }
+        }
+
+        // Update final states to connect to new end
+        let mut all_states = left.states;
+        all_states.extend(right.states);
+
+        NFA {
+            states: all_states,
+            start_state: left.start_state,
+            final_state: right.final_state,
+        }
+    }
+    
+    // Alternation: One or the other
+    fn alternate(&mut self, left: NFA, right: NFA) -> NFA {
+        // Create new start and end states
+        let new_start = self.state_counter;
+        let new_end = self.state_counter + 1;
+        self.state_counter += 2;
+        
+        let mut states = vec![
+            NFAState::new(new_start, false),
+            NFAState::new(new_end, true),
+        ];
+        
+        // New start connects to both paths
+        states[0].add_transition(None, left.start_state);
+        states[0].add_transition(None, right.start_state);
+        
+        // Add all states from left and right
+        states.extend(left.states);
+        states.extend(right.states);
+        
+        // Update final states to connect to new end
+        for state in &mut states {
+            if state.id == left.final_state || state.id == right.final_state {
+                state.add_transition(None, new_end);
+                state.is_final = false;
+            }
+        }
+        
+        NFA {
+            states,
+            start_state: new_start,
+            final_state: new_end,
+        }
+    }
+    
+    // Kleene star: zero or more
+    fn kleene_star(&mut self, inner: NFA) -> NFA {
+        // Create new start and end states
+        let new_start = self.state_counter;
+        let new_end = self.state_counter + 1;
+        self.state_counter += 2;
+        
+        let mut states = vec![
+            NFAState::new(new_start, false),
+            NFAState::new(new_end, true),
+        ];
+        
+        // Epsilon from new start to original start
+        states[0].add_transition(None, inner.start_state);
+        // Epsilon from new start to new end 
+        states[0].add_transition(None, new_end);
+        
+        states.extend(inner.states);
+        
+        // Update final states to connect to new end and loop back
+        for state in &mut states {
+            if state.id == inner.final_state {
+                state.add_transition(None, inner.start_state);  // loop
+                state.add_transition(None, new_end);            
+                state.is_final = false;
+            }
+        }
+        
+        NFA {
+            states,
+            start_state: new_start,
+            final_state: new_end,
+        }
+    }
+    
+    // Plus: one or more
+    fn one_or_more(&mut self, inner: NFA) -> NFA {
+        // Create new start and end states
+        let new_start = self.state_counter;
+        let new_end = self.state_counter + 1;
+        self.state_counter += 2;
+        
+        let mut states = vec![
+            NFAState::new(new_start, false),
+            NFAState::new(new_end, true),
+        ];
+        
+        // Epsilon from new start to original start
+        states[0].add_transition(None, inner.start_state);
+        
+        states.extend(inner.states);
+        
+        // Update final states to connect to new end and loop back
+        for state in &mut states {
+            if state.id == inner.final_state {
+                state.add_transition(None, inner.start_state);  // loop
+                state.add_transition(None, new_end);           
+                state.is_final = false;
+            }
+        }
+        
+        NFA {
+            states,
+            start_state: new_start,
+            final_state: new_end,
+        }
+    }
+    
+    // Question: zero or one
+    fn zero_or_one(&mut self, inner: NFA) -> NFA {
+        // Create new start and end states
+        let new_start = self.state_counter;
+        let new_end = self.state_counter + 1;
+        self.state_counter += 2;
+        
+        let mut states = vec![
+            NFAState::new(new_start, false),
+            NFAState::new(new_end, true),
+        ];
+        
+        // Epsilon from new start to original start
+        states[0].add_transition(None, inner.start_state);
+
+        // Epsilon from new start to new end
+        states[0].add_transition(None, new_end);
+        
+        states.extend(inner.states);
+        
+        // Update final states to connect to new end
+        for state in &mut states {
+            if state.id == inner.final_state {
+                state.add_transition(None, new_end);
+                state.is_final = false;
+            }
+        }
+        
+        NFA {
+            states,
+            start_state: new_start,
+            final_state: new_end,
+        }
+    }
+}
+
+
 fn process_regex(input: &str) -> Result<(), Error> {
     println!("Input: {}", input);
-    
     
     let mut tokenizer = Tokenizer::new(input);
     let tokens = tokenizer.tokenize()?;
@@ -281,6 +626,10 @@ fn process_regex(input: &str) -> Result<(), Error> {
     
     let visualizer = TreeVisualizer::new();
     visualizer.print_tree(&syntax_tree);
+
+    let mut thompson = ThompsonBuilder::new();
+    let nfa = thompson.build_from_tree(&syntax_tree);
+    nfa.print_nfa();
     
     Ok(())
 }
