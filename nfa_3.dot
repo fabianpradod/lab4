@@ -1,0 +1,34 @@
+digraph NFA {
+    rankdir=LR;
+    node [shape=circle];
+    start [shape=none, label=""];
+    start -> 6;
+    21 [shape=doublecircle];
+    6 -> 4 [label="ε"];
+    6 -> 7 [label="ε"];
+    7 -> 8 [label="ε"];
+    4 -> 0 [label="ε"];
+    4 -> 2 [label="ε"];
+    5 -> 4 [label="ε"];
+    5 -> 7 [label="ε"];
+    0 -> 1 [label="a"];
+    1 -> 5 [label="ε"];
+    2 -> 3 [label="b"];
+    3 -> 5 [label="ε"];
+    8 -> 9 [label="a"];
+    9 -> 10 [label="ε"];
+    10 -> 11 [label="b"];
+    11 -> 12 [label="ε"];
+    12 -> 13 [label="b"];
+    13 -> 20 [label="ε"];
+    20 -> 18 [label="ε"];
+    20 -> 21 [label="ε"];
+    18 -> 14 [label="ε"];
+    18 -> 16 [label="ε"];
+    19 -> 18 [label="ε"];
+    19 -> 21 [label="ε"];
+    14 -> 15 [label="a"];
+    15 -> 19 [label="ε"];
+    16 -> 17 [label="b"];
+    17 -> 19 [label="ε"];
+}
